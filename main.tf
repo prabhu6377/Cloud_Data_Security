@@ -13,7 +13,7 @@ resource "aws_macie2_classification_job" "s3_scan" {
   job_type            = "ONE_TIME"
   initial_run         = true
   sampling_percentage = 100
-  managed_data_identifier_ids = ["ALL"]
+#  managed_data_identifier_ids = ["ALL"]
 
   s3_job_definition {
     bucket_definitions {
@@ -23,6 +23,8 @@ resource "aws_macie2_classification_job" "s3_scan" {
   }
 }
 
+# Automatically Make Public S3 Buckets Private
+
 resource "aws_s3_bucket_public_access_block" "block_public" {
   bucket = var.bucket_name
 
@@ -30,4 +32,100 @@ resource "aws_s3_bucket_public_access_block" "block_public" {
   ignore_public_acls      = true
   block_public_policy     = true
   restrict_public_buckets = true
+}
+
+# Enable Default Encryption on S3 Buckets
+resource "aws_s3_bucket_server_side_encryption_configuration" "default" {
+  bucket = var.bucket_name
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+# Enable Access Logging for Auditing
+
+resource "aws_s3_bucket_logging" "access_logs" {
+  bucket = var.bucket_name
+
+  target_bucket = var.log_bucket
+  target_prefix = "access-logs/"
+}
+
+# Attach S3 Bucket Policy to Deny Non-Encrypted Uploads
+/*
+resource "aws_s3_bucket_policy" "deny_unencrypted" {
+  bucket = var.bucket_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "DenyUnEncryptedObjectUploads"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:PutObject"
+        Resource  = "arn:aws:s3:::${var.bucket_name}/*"
+        Condition = {
+          StringNotEquals = {
+            "s3:x-amz-server-side-encryption" = "AES256"
+          }
+        }
+      }
+    ]
+  })
+}
+*/
+# Create an SNS Topic + Email Subscription
+
+resource "aws_sns_topic" "macie_alerts" {
+  name = "macie-alerts-topic"
+}
+
+resource "aws_sns_topic_subscription" "email_alert" {
+  topic_arn = aws_sns_topic.macie_alerts.arn
+  protocol  = "email"
+  endpoint  = var.alert_email  # e.g. you@example.com
+}
+
+# Create an EventBridge Rule to Catch Macie Findings
+
+resource "aws_cloudwatch_event_rule" "macie_findings" {
+  name        = "macie-finding-rule"
+  description = "Trigger on new Macie findings"
+
+  event_pattern = jsonencode({
+    source      = ["aws.macie2"],
+    "detail-type" = ["Macie Finding"]
+  })
+}
+
+# Connect the Rule to SNS Topic
+
+resource "aws_cloudwatch_event_target" "send_to_sns" {
+  rule      = aws_cloudwatch_event_rule.macie_findings.name
+  target_id = "sendToSNS"
+  arn       = aws_sns_topic.macie_alerts.arn
+}
+/*
+# IAM Permission for EventBridge to Publish to SNS
+
+resource "aws_lambda_permission" "eventbridge_to_sns" {
+  statement_id  = "AllowExecutionFromEventBridge"
+  action        = "lambda:InvokeFunction"
+  principal     = "events.amazonaws.com"
+  function_name = aws_lambda_function.auto_remediate.function_name
+  source_arn    = aws_cloudwatch_event_rule.macie_findings.arn
+}
+*/
+# Define the Lambda Function in Terraform
+resource "aws_lambda_function" "auto_remediate" {
+  function_name = "macie_auto_remediate"
+  role          = aws_iam_role.lambda_exec_role.arn
+  handler       = "auto_remediate.lambda_handler"
+  runtime       = "python3.10"
+  filename      = data.archive_file.lambda_zip.output_path
+  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
 }
