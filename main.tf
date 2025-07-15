@@ -7,7 +7,7 @@ data "aws_caller_identity" "current" {}
 data "aws_s3_bucket" "target" {
   bucket = var.bucket_name
 }
-
+/*
 resource "aws_macie2_classification_job" "s3_scan" {
   name                = var.job_name
   job_type            = "ONE_TIME"
@@ -21,6 +21,29 @@ resource "aws_macie2_classification_job" "s3_scan" {
       buckets    = [var.bucket_name]
     }
   }
+}
+*/
+resource "aws_macie2_classification_job" "s3_scan" {
+  name        = "scheduled-macie-job"
+  job_type    = "SCHEDULED"
+  initial_run = true
+
+  sampling_percentage = 100
+
+  s3_job_definition {
+    bucket_definitions {
+      account_id = data.aws_caller_identity.current.account_id
+      buckets    = [var.bucket_name]
+    }
+  }
+
+  schedule_frequency {
+    daily_schedule {}  # ⬅️ You can also use weekly_schedule { day_of_week = "MONDAY" }
+  }
+
+  depends_on = [
+    aws_macie2_account.macie
+  ]
 }
 
 # Automatically Make Public S3 Buckets Private
