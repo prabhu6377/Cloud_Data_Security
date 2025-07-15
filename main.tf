@@ -22,3 +22,12 @@ resource "aws_macie2_classification_job" "s3_scan" {
     }
   }
 }
+
+resource "aws_s3_bucket_public_access_block" "block_public" {
+  bucket = var.bucket_name
+
+  block_public_acls       = true
+  ignore_public_acls      = true
+  block_public_policy     = true
+  restrict_public_buckets = true
+}
