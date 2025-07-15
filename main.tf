@@ -129,3 +129,80 @@ resource "aws_lambda_function" "auto_remediate" {
   filename      = data.archive_file.lambda_zip.output_path
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
 }
+# AWS lambda Execution Role.
+resource "aws_iam_role" "lambda_exec_role" {
+  name = "lambda_execution_role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Action    = "sts:AssumeRole",
+      Effect    = "Allow",
+      Principal = {
+        Service = "lambda.amazonaws.com"
+      }
+    }]
+  })
+}
+
+# Attach basic execution policy
+resource "aws_iam_role_policy_attachment" "lambda_basic_execution" {
+  role       = aws_iam_role.lambda_exec_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# Inline Policy
+resource "aws_iam_policy" "custom_access" {
+  name = "LambdaS3MaciePolicy"
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect   = "Allow",
+        Action   = ["s3:GetObject", "s3:PutObject"],
+        Resource = "arn:aws:s3:::macie-test-bucket-prabhu/*"
+      },
+      {
+        Effect   = "Allow",
+        Action   = ["macie2:GetFindings", "macie2:ListFindings"],
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "attach_custom_access" {
+  role       = aws_iam_role.lambda_exec_role.name
+  policy_arn = aws_iam_policy.custom_access.arn
+}
+
+data "archive_file" "lambda_zip" {
+  type        = "zip"
+  source_file = "${path.module}/lambda/auto_remediate.py"
+  output_path = "${path.module}/lambda/auto_remediate.zip"
+}
+/*
+
+resource "aws_cloudwatch_event_rule" "macie_findings" {
+  name        = "macie-finding-rule"
+  description = "Trigger Lambda on Macie findings"
+  event_pattern = jsonencode({
+    "source": ["aws.macie2"],
+    "detail-type": ["Macie Finding"]
+  })
+}
+*/
+
+resource "aws_cloudwatch_event_target" "macie_lambda_target" {
+  rule      = aws_cloudwatch_event_rule.macie_findings.name
+  target_id = "macie-auto-remediate"
+  arn       = aws_lambda_function.auto_remediate.arn
+}
+
+resource "aws_lambda_permission" "allow_eventbridge" {
+  statement_id  = "AllowExecutionFromEventBridge"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.auto_remediate.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.macie_findings.arn
+}
